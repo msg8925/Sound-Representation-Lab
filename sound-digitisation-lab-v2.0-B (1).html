@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sound Digitisation Lab v2.0-B</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f4f4;margin:20px}
+h1{text-align:center}
+.panel,.controls{background:#fff;padding:12px;border-radius:8px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+canvas{width:100%;height:240px;border:1px solid #ccc;background:white}
+button{margin:4px;padding:8px 12px}
+.good{color:green;font-weight:bold}.bad{color:red;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>Sound Digitisation Lab v2.0-B</h1>
+
+<div class="controls">
+Wave:
+<select id="waveType">
+<option>Sine</option><option>Square</option><option>Triangle</option>
+<option>Sawtooth</option><option>Speech-like</option>
+</select><br><br>
+
+Frequency <span id="freqVal">3</span> Hz
+<input type="range" id="freq" min="1" max="12" value="3"><br>
+
+Sample Rate <span id="sampleVal">16</span>
+<input type="range" id="sampleRate" min="4" max="64" value="16"><br>
+
+Bit Depth <span id="bitVal">4</span>
+<input type="range" id="bitDepth" min="1" max="8" value="4"><br><br>
+
+<button id="playAnim">▶ Play Sampling Animation</button>
+<button id="pauseAnim">⏸ Pause</button>
+<button id="resetAnim">⏹ Reset</button>
+
+<button id="playOriginal">🔊 Play Original</button>
+<button id="playQuantized">🔊 Play Quantized</button>
+</div>
+
+<div class="grid">
+<div class="panel"><h3>Original Wave</h3><canvas id="orig" width="700" height="240"></canvas></div>
+<div class="panel"><h3>Sampling Process</h3><canvas id="sample" width="700" height="240"></canvas></div>
+<div class="panel"><h3>Quantized Wave</h3><canvas id="quant" width="700" height="240"></canvas></div>
+<div class="panel"><h3>Reconstructed Wave</h3><canvas id="recon" width="700" height="240"></canvas></div>
+</div>
+
+<div class="panel">
+Nyquist: <span id="nyquist"></span> |
+Aliasing Status: <span id="aliasing"></span>
+</div>
+
+<script>
+const freqSlider=document.getElementById("freq");
+const sampleRateSlider=document.getElementById("sampleRate");
+const bitDepthSlider=document.getElementById("bitDepth");
+const waveType=document.getElementById("waveType");
+
+const freqVal=document.getElementById("freqVal");
+const sampleVal=document.getElementById("sampleVal");
+const bitVal=document.getElementById("bitVal");
+
+let animPos=0;
+let animating=false;
+let animationFrame;
+
+function wave(t,f,type){
+ const x=f*t;
+ switch(type){
+  case "Square": return Math.sign(Math.sin(2*Math.PI*x))||1;
+  case "Triangle": return 2*Math.abs(2*(x-Math.floor(x+0.5)))-1;
+  case "Sawtooth": return 2*(x-Math.floor(x))-1;
+  case "Speech-like":
+   return 0.6*Math.sin(2*Math.PI*x)+0.25*Math.sin(2*Math.PI*3*x)+0.15*Math.sin(2*Math.PI*5*x);
+  default: return Math.sin(2*Math.PI*x);
+ }
+}
+
+function setup(id){
+ const c=document.getElementById(id);
+ const ctx=c.getContext("2d");
+ ctx.clearRect(0,0,c.width,c.height);
+ ctx.beginPath();
+ ctx.moveTo(30,c.height/2);
+ ctx.lineTo(c.width-10,c.height/2);
+ ctx.moveTo(30,10);
+ ctx.lineTo(30,c.height-10);
+ ctx.strokeStyle="#999";
+ ctx.stroke();
+ return {c,ctx};
+}
+
+function drawWave(ctx,c,color,fn){
+ ctx.strokeStyle=color;
+ ctx.beginPath();
+ for(let x=30;x<c.width-10;x++){
+  const t=(x-30)/(c.width-40);
+  const y=fn(t);
+  const py=c.height/2-y*90;
+  if(x===30) ctx.moveTo(x,py); else ctx.lineTo(x,py);
+ }
+ ctx.stroke();
+}
+
+function render(){
+ const frequency=+freqSlider.value;
+ const sampleRate=+sampleRateSlider.value;
+ const bits=+bitDepthSlider.value;
+ const type=waveType.value;
+
+ freqVal.textContent=frequency;
+ sampleVal.textContent=sampleRate;
+ bitVal.textContent=bits;
+
+ const orig=setup("orig");
+ const samp=setup("sample");
+ const quant=setup("quant");
+ const recon=setup("recon");
+
+ drawWave(orig.ctx,orig.c,"blue",t=>wave(t,frequency,type));
+ drawWave(samp.ctx,samp.c,"#ccc",t=>wave(t,frequency,type));
+ drawWave(quant.ctx,quant.c,"#ddd",t=>wave(t,frequency,type));
+ drawWave(recon.ctx,recon.c,"#ddd",t=>wave(t,frequency,type));
+
+ let samples=[];
+ const levels=Math.pow(2,bits);
+
+ for(let i=0;i<sampleRate;i++){
+   const t=i/(sampleRate-1);
+   const v=wave(t,frequency,type);
+
+   const px=30+t*(samp.c.width-40);
+   const py=samp.c.height/2-v*90;
+
+   if(px<=animPos){
+     samp.ctx.fillStyle="red";
+     samp.ctx.beginPath();
+     samp.ctx.arc(px,py,4,0,Math.PI*2);
+     samp.ctx.fill();
+   }
+
+   const q=Math.round(((v+1)/2)*(levels-1));
+   const qa=(q/(levels-1))*2-1;
+
+   samples.push({t,qa});
+
+   if(px<=animPos){
+     quant.ctx.strokeStyle="red";
+     quant.ctx.beginPath();
+     quant.ctx.moveTo(px,py);
+     quant.ctx.lineTo(px,quant.c.height/2-qa*90);
+     quant.ctx.stroke();
+
+     quant.ctx.fillStyle="green";
+     quant.ctx.beginPath();
+     quant.ctx.arc(px,quant.c.height/2-qa*90,4,0,Math.PI*2);
+     quant.ctx.fill();
+   }
+ }
+
+ recon.ctx.strokeStyle="green";
+ recon.ctx.beginPath();
+ samples.forEach((s,i)=>{
+   const px=30+s.t*(recon.c.width-40);
+   const py=recon.c.height/2-s.qa*90;
+   if(i===0) recon.ctx.moveTo(px,py); else recon.ctx.lineTo(px,py);
+ });
+ recon.ctx.stroke();
+
+ if(animPos>0){
+   [orig,samp].forEach(obj=>{
+      obj.ctx.strokeStyle="orange";
+      obj.ctx.beginPath();
+      obj.ctx.moveTo(animPos,0);
+      obj.ctx.lineTo(animPos,obj.c.height);
+      obj.ctx.stroke();
+   });
+ }
+
+ const pass=sampleRate>=frequency*2;
+ document.getElementById("nyquist").textContent=pass?"PASS":"FAIL";
+ document.getElementById("nyquist").className=pass?"good":"bad";
+
+ document.getElementById("aliasing").textContent=pass?"No aliasing expected":"Aliasing likely";
+ document.getElementById("aliasing").className=pass?"good":"bad";
+}
+
+function animate(){
+ if(!animating) return;
+ animPos+=2;
+ const max=document.getElementById("sample").width-10;
+ if(animPos>max) animPos=30;
+ render();
+ animationFrame=requestAnimationFrame(animate);
+}
+
+document.getElementById("playAnim").onclick=()=>{
+ animating=true;
+ cancelAnimationFrame(animationFrame);
+ animate();
+};
+document.getElementById("pauseAnim").onclick=()=>{
+ animating=false;
+};
+document.getElementById("resetAnim").onclick=()=>{
+ animating=false;
+ animPos=0;
+ render();
+};
+
+function playSound(quantized){
+ const ctx=new (window.AudioContext||window.webkitAudioContext)();
+ const sr=44100;
+ const duration=2;
+ const frequency=+freqSlider.value;
+ const bits=+bitDepthSlider.value;
+ const type=waveType.value;
+
+ const buffer=ctx.createBuffer(1,sr*duration,sr);
+ const data=buffer.getChannelData(0);
+ const levels=Math.pow(2,bits);
+
+ for(let i=0;i<data.length;i++){
+   let t=i/sr;
+   let v=wave(t,frequency,type);
+
+   if(quantized){
+      const q=Math.round(((v+1)/2)*(levels-1));
+      v=(q/(levels-1))*2-1;
+   }
+
+   data[i]=v*0.25;
+ }
+
+ const src=ctx.createBufferSource();
+ src.buffer=buffer;
+ src.connect(ctx.destination);
+ src.start();
+}
+
+document.getElementById("playOriginal").onclick=()=>playSound(false);
+document.getElementById("playQuantized").onclick=()=>playSound(true);
+
+[freqSlider,sampleRateSlider,bitDepthSlider].forEach(x=>x.addEventListener("input",render));
+waveType.addEventListener("change",render);
+
+render();
+</script>
+</body>
+</html>
